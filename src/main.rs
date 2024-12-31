@@ -19,7 +19,7 @@ use bsp::hal::{
 use core::cell::RefCell;
 
 use cortex_m::delay::Delay;
-use cortex_m::interrupt::{free, Mutex};
+use cortex_m::interrupt::Mutex;
 use fugit::{ExtU32, MicrosDurationU32};
 use once_cell::sync::Lazy;
 
@@ -99,7 +99,8 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
 fn main() -> ! {
     info!("Program start");
 
-    let mut delay = free(|cs| MACHINE.borrow(cs).borrow_mut().delay.take().unwrap());
+    let mut delay =
+        cortex_m::interrupt::free(|cs| MACHINE.borrow(cs).borrow_mut().delay.take().unwrap());
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
     }
@@ -115,7 +116,7 @@ fn main() -> ! {
 
 #[interrupt]
 fn TIMER_IRQ_0() {
-    free(|cs| {
+    cortex_m::interrupt::free(|cs| {
         info!("interrupt!");
         let mut m = MACHINE.borrow(cs).borrow_mut();
         m.alarm_0.clear_interrupt();
