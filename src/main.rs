@@ -1,40 +1,49 @@
 #![no_std]
 #![no_main]
 
+// Entry point
 use bsp::entry;
+// Logging support
 use defmt::*;
 use defmt_rtt as _;
+
 use embedded_hal::digital::StatefulOutputPin;
+// Panic handler
 use panic_probe as _;
 
-use rp_pico::{self as bsp, hal::timer::Alarm, hal::timer::Alarm0, hal::timer::Timer};
+use rp_pico::{
+    self as bsp, // alias for the BSP
+    hal::timer::Alarm,
+    hal::timer::Alarm0,
+    hal::timer::Timer,
+};
 
 use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
-    pac,
-    sio::Sio,
-    watchdog::Watchdog,
+    clocks::{init_clocks_and_plls, Clock}, // Clocks
+    pac,                                   // Peripherals
+    pac::interrupt,                        // interrupt macro
+    sio::Sio,                              // Peripherals
+    watchdog::Watchdog,                    // Peripherals
 };
 
 use core::cell::RefCell;
 
+use bsp::hal::gpio::bank0;
+use bsp::hal::gpio::{
+    FunctionSioInput, FunctionSioOutput, Interrupt::EdgeLow, Pin, PullDown, PullUp,
+};
 use cortex_m::delay::Delay;
 use cortex_m::interrupt::Mutex;
 use fugit::{ExtU32, MicrosDurationU32};
 use once_cell::sync::Lazy;
-
-use bsp::hal::pac::interrupt;
 
 static TIMER_DURATION: Lazy<MicrosDurationU32> = Lazy::new(|| 100_u32.millis());
 
 struct Machine {
     pub delay: Option<Delay>,
     pub alarm_0: Alarm0,
-    pub led_pin: bsp::hal::gpio::Pin<
-        bsp::hal::gpio::bank0::Gpio25,
-        bsp::hal::gpio::FunctionSioOutput,
-        bsp::hal::gpio::PullDown,
-    >,
+    pub led_pin: Pin<bank0::Gpio25, FunctionSioOutput, PullDown>,
+    pub button_0: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
 }
 
 impl Machine {
@@ -86,9 +95,14 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
 
     let led_pin = pins.led.into_push_pull_output();
 
+    let button_0 = pins.gpio4.into_pull_up_input();
+
+    button_0.set_interrupt_enabled(EdgeLow, true);
+
     let mut m = Machine {
         delay: delay,
         led_pin: led_pin,
+        button_0: button_0,
         alarm_0: alarm_0,
     };
     m.reset_timer();
@@ -102,29 +116,46 @@ fn main() -> ! {
     let mut delay =
         cortex_m::interrupt::free(|cs| MACHINE.borrow(cs).borrow_mut().delay.take().unwrap());
     unsafe {
+        pac::NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0);
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
     }
 
-    unsafe {
-        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
-    }
+    delay.delay_ms(100);
 
     loop {
-        delay.delay_ms(100);
+        cortex_m::asm::wfi();
     }
 }
 
 #[interrupt]
 fn TIMER_IRQ_0() {
     cortex_m::interrupt::free(|cs| {
-        info!("interrupt!");
         let mut m = MACHINE.borrow(cs).borrow_mut();
         m.alarm_0.clear_interrupt();
-        if let Err(e) = m.led_pin.toggle() {
-            warn!("Error while interrupt: {:?}", e);
-        }
+        // if let Err(e) = m.led_pin.toggle() {
+        //     warn!("Error while interrupt: {:?}", e);
+        // }
         m.reset_timer();
     });
+}
+
+#[interrupt]
+fn IO_IRQ_BANK0() {
+    info!("IO_IRQ_BANK0 interrupt");
+    cortex_m::interrupt::free(|cs| {
+        let mut m = MACHINE.borrow(cs).borrow_mut();
+        // Check if the interrupt source is from the pushbutton going from high-to-low.
+        // Note: this will always be true in this example, as that is the only enabled GPIO interrupt source
+        if m.button_0.interrupt_status(EdgeLow) {
+            // toggle can't fail, but the embedded-hal traits always allow for it
+            // we can discard the return value by assigning it to an unnamed variable
+            let _ = m.led_pin.toggle();
+            info!("Button pressed");
+            // Our interrupt doesn't clear itself.
+            // Do that now so we don't immediately jump back to this interrupt handler.
+            m.button_0.clear_interrupt(EdgeLow);
+        }
+    })
 }
 
 // End of file
