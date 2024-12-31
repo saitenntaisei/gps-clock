@@ -137,15 +137,15 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     button_3.set_interrupt_enabled(EdgeLow, true);
 
     let mut m = Machine {
-        delay: delay,
-        led_system: led_system,
-        led_user1: led_user1,
-        led_user2: led_user2,
-        button_1: button_1,
-        button_2: button_2,
-        button_3: button_3,
-        alarm_0: alarm_0,
-        uart: uart,
+        delay,
+        led_system,
+        led_user1,
+        led_user2,
+        button_1,
+        button_2,
+        button_3,
+        alarm_0,
+        uart,
     };
     m.reset_timer();
     m.enable_uart();
