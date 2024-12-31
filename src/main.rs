@@ -43,7 +43,9 @@ struct Machine {
     pub delay: Option<Delay>,
     pub alarm_0: Alarm0,
     pub led_pin: Pin<bank0::Gpio25, FunctionSioOutput, PullDown>,
-    pub button_0: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
+    pub button_1: Pin<bank0::Gpio3, FunctionSioInput, PullUp>,
+    pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
+    pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
 }
 
 impl Machine {
@@ -94,15 +96,20 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     );
 
     let led_pin = pins.led.into_push_pull_output();
+    let button_1 = pins.gpio3.into_pull_up_input();
+    let button_2 = pins.gpio2.into_pull_up_input();
+    let button_3 = pins.gpio4.into_pull_up_input();
 
-    let button_0 = pins.gpio4.into_pull_up_input();
-
-    button_0.set_interrupt_enabled(EdgeLow, true);
+    button_1.set_interrupt_enabled(EdgeLow, true);
+    button_2.set_interrupt_enabled(EdgeLow, true);
+    button_3.set_interrupt_enabled(EdgeLow, true);
 
     let mut m = Machine {
         delay: delay,
         led_pin: led_pin,
-        button_0: button_0,
+        button_1: button_1,
+        button_2: button_2,
+        button_3: button_3,
         alarm_0: alarm_0,
     };
     m.reset_timer();
@@ -132,28 +139,28 @@ fn TIMER_IRQ_0() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         m.alarm_0.clear_interrupt();
-        // if let Err(e) = m.led_pin.toggle() {
-        //     warn!("Error while interrupt: {:?}", e);
-        // }
+        if let Err(e) = m.led_pin.toggle() {
+            warn!("Error while interrupt: {:?}", e);
+        }
         m.reset_timer();
     });
 }
 
 #[interrupt]
 fn IO_IRQ_BANK0() {
-    info!("IO_IRQ_BANK0 interrupt");
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
-        // Check if the interrupt source is from the pushbutton going from high-to-low.
-        // Note: this will always be true in this example, as that is the only enabled GPIO interrupt source
-        if m.button_0.interrupt_status(EdgeLow) {
-            // toggle can't fail, but the embedded-hal traits always allow for it
-            // we can discard the return value by assigning it to an unnamed variable
-            let _ = m.led_pin.toggle();
-            info!("Button pressed");
-            // Our interrupt doesn't clear itself.
-            // Do that now so we don't immediately jump back to this interrupt handler.
-            m.button_0.clear_interrupt(EdgeLow);
+        if m.button_1.interrupt_status(EdgeLow) {
+            info!("Button1 pressed");
+            m.button_1.clear_interrupt(EdgeLow);
+        }
+        if m.button_2.interrupt_status(EdgeLow) {
+            info!("Button2 pressed");
+            m.button_2.clear_interrupt(EdgeLow);
+        }
+        if m.button_3.interrupt_status(EdgeLow) {
+            info!("Button3 pressed");
+            m.button_3.clear_interrupt(EdgeLow);
         }
     })
 }
