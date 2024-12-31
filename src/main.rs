@@ -7,12 +7,12 @@
 use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::{OutputPin, StatefulOutputPin};
+use embedded_hal::digital::StatefulOutputPin;
 use panic_probe as _;
 
 // Provide an alias for our BSP so we can switch targets quickly.
 // Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico::{self as bsp, hal::timer::Alarm};
+use rp_pico::{self as bsp, hal::timer::Alarm, hal::timer::Alarm0, hal::timer::Timer};
 // use sparkfun_pro_micro_rp2040 as bsp;
 
 use bsp::hal::{
@@ -23,26 +23,36 @@ use bsp::hal::{
 };
 
 use core::cell::RefCell;
-use critical_section::Mutex;
-use fugit::MicrosDurationU32;
-use pac::interrupt;
 
-type LedAndAlarm = (
-    bsp::hal::gpio::Pin<
+use cortex_m::delay::Delay;
+use cortex_m::interrupt::{free, Mutex};
+use fugit::{ExtU32, MicrosDurationU32};
+use once_cell::sync::Lazy;
+
+use bsp::hal::pac::interrupt;
+
+static TIMER_DURATION: Lazy<MicrosDurationU32> = Lazy::new(|| 100_u32.millis());
+
+struct Machine {
+    pub delay: Option<Delay>,
+    pub alarm_0: Alarm0,
+    pub led_pin: bsp::hal::gpio::Pin<
         bsp::hal::gpio::bank0::Gpio25,
         bsp::hal::gpio::FunctionSioOutput,
         bsp::hal::gpio::PullDown,
     >,
-    bsp::hal::timer::Alarm0,
-);
+}
 
-static mut LED_AND_ALARM: Mutex<RefCell<Option<LedAndAlarm>>> = Mutex::new(RefCell::new(None));
+impl Machine {
+    fn reset_timer(&mut self) {
+        self.alarm_0.enable_interrupt();
+        if self.alarm_0.schedule(*TIMER_DURATION).is_err() {
+            warn!("Error while initializing timer");
+        }
+    }
+}
 
-const FAST_BLINK_INTERVAL_US: MicrosDurationU32 = MicrosDurationU32::millis(10);
-
-#[entry]
-fn main() -> ! {
-    info!("Program start");
+static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
@@ -61,8 +71,17 @@ fn main() -> ! {
     )
     .ok()
     .unwrap();
+    let delay = Some(cortex_m::delay::Delay::new(
+        core.SYST,
+        clocks.system_clock.freq().to_Hz(),
+    ));
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let mut alarm_0 = timer.alarm_0().unwrap();
+    alarm_0.enable_interrupt();
+    if alarm_0.schedule(*TIMER_DURATION).is_err() {
+        warn!("Error while initializing timer");
+    }
 
     let pins = bsp::Pins::new(
         pac.IO_BANK0,
@@ -82,16 +101,24 @@ fn main() -> ! {
     // in series with the LED.
     let led_pin = pins.led.into_push_pull_output();
 
-    let mut timer = bsp::hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let mut m = Machine {
+        delay: delay,
+        led_pin: led_pin,
+        alarm_0: alarm_0,
+    };
+    m.reset_timer();
+    Mutex::new(RefCell::new(m))
+});
 
-    critical_section::with(|cs| {
-        let mut alarm = timer.alarm_0().unwrap();
-        let _ = alarm.schedule(FAST_BLINK_INTERVAL_US);
-        alarm.enable_interrupt();
-        unsafe {
-            LED_AND_ALARM.borrow(cs).replace(Some((led_pin, alarm)));
-        }
-    });
+#[entry]
+fn main() -> ! {
+    info!("Program start");
+
+    let mut delay = free(|cs| MACHINE.borrow(cs).borrow_mut().delay.take().unwrap());
+    unsafe {
+        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+    }
+
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
     }
@@ -108,30 +135,14 @@ fn main() -> ! {
 
 #[interrupt]
 fn TIMER_IRQ_0() {
-    // (7)
-    critical_section::with(|cs| {
-        let ledalarm = unsafe { LED_AND_ALARM.borrow(cs).take() };
-        if let Some((mut led, mut alarm)) = ledalarm {
-            alarm.clear_interrupt();
-            let _ = alarm.schedule(FAST_BLINK_INTERVAL_US);
-
-            unsafe {
-                static mut COUNT: u8 = 0;
-                COUNT += 1;
-                if 9 < COUNT {
-                    COUNT = 0;
-                    // Blink the LED so we know we hit this interrupt
-                    led.toggle().unwrap();
-                }
-            }
-
-            // Return LED_AND_ALARM into our static variable
-            unsafe {
-                LED_AND_ALARM
-                    .borrow(cs)
-                    .replace_with(|_| Some((led, alarm)));
-            }
+    free(|cs| {
+        info!("interrupt!");
+        let mut m = MACHINE.borrow(cs).borrow_mut();
+        m.alarm_0.clear_interrupt();
+        if let Err(e) = m.led_pin.toggle() {
+            warn!("Error while interrupt: {:?}", e);
         }
+        m.reset_timer();
     });
 }
 
