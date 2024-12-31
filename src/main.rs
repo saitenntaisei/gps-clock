@@ -8,6 +8,8 @@ use defmt::*;
 use defmt_rtt as _;
 
 use embedded_hal::digital::StatefulOutputPin;
+use embedded_hal_nb::serial::{Read, Write};
+
 // Panic handler
 use panic_probe as _;
 
@@ -30,12 +32,22 @@ use core::cell::RefCell;
 
 use bsp::hal::gpio::bank0;
 use bsp::hal::gpio::{
-    FunctionSioInput, FunctionSioOutput, Interrupt::EdgeLow, Pin, PullDown, PullUp,
+    FunctionSioInput, FunctionSioOutput, FunctionUart, Interrupt::EdgeLow, Pin, PullDown, PullNone,
+    PullUp,
 };
+use bsp::hal::uart;
+use bsp::hal::uart::{DataBits, StopBits, UartConfig};
 use cortex_m::delay::Delay;
 use cortex_m::interrupt::Mutex;
-use fugit::{ExtU32, MicrosDurationU32};
+use fugit::{ExtU32, MicrosDurationU32, RateExtU32};
 use once_cell::sync::Lazy;
+
+type UartPins = (
+    Pin<bank0::Gpio0, FunctionUart, PullNone>,
+    Pin<bank0::Gpio1, FunctionUart, PullNone>,
+);
+
+type Uart = uart::UartPeripheral<uart::Enabled, pac::UART0, UartPins>;
 
 static TIMER_DURATION: Lazy<MicrosDurationU32> = Lazy::new(|| 100_u32.millis());
 
@@ -48,6 +60,7 @@ struct Machine {
     pub button_1: Pin<bank0::Gpio3, FunctionSioInput, PullUp>,
     pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
     pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
+    pub uart: Uart,
 }
 
 impl Machine {
@@ -56,6 +69,12 @@ impl Machine {
         if self.alarm_0.schedule(*TIMER_DURATION).is_err() {
             warn!("Error while initializing timer");
         }
+    }
+    fn enable_uart(&mut self) {
+        self.uart.enable_rx_interrupt();
+
+        self.uart
+            .write_full_blocking(b"uart_interrupt example started...\n");
     }
 }
 
@@ -97,6 +116,15 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
         &mut pac.RESETS,
     );
 
+    let uart_pins = (pins.gpio0.reconfigure(), pins.gpio1.reconfigure());
+
+    let uart = uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
+        .enable(
+            UartConfig::new(9600.Hz(), DataBits::Eight, None, StopBits::One),
+            clocks.peripheral_clock.freq(),
+        )
+        .unwrap();
+
     let led_system = pins.led.into_push_pull_output();
     let led_user1 = pins.gpio16.into_push_pull_output();
     let led_user2 = pins.gpio17.into_push_pull_output();
@@ -117,8 +145,10 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
         button_2: button_2,
         button_3: button_3,
         alarm_0: alarm_0,
+        uart: uart,
     };
     m.reset_timer();
+    m.enable_uart();
     Mutex::new(RefCell::new(m))
 });
 
@@ -170,7 +200,20 @@ fn IO_IRQ_BANK0() {
             info!("Button3 pressed");
             m.button_3.clear_interrupt(EdgeLow);
         }
-    })
+    });
 }
 
+#[interrupt]
+fn UART0_IRQ() {
+    cortex_m::interrupt::free(|cs| {
+        let mut m = MACHINE.borrow(cs).borrow_mut();
+        while let Ok(byte) = m.uart.read() {
+            let _ = m.uart.write(byte);
+        }
+    });
+
+    // Set an event to ensure the main thread always wakes up, even if it's in
+    // the process of going to sleep.
+    cortex_m::asm::sev();
+}
 // End of file
