@@ -161,6 +161,7 @@ fn main() -> ! {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0);
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+        pac::NVIC::unmask(pac::Interrupt::UART0_IRQ);
     }
 
     delay.delay_ms(100);
