@@ -42,7 +42,9 @@ static TIMER_DURATION: Lazy<MicrosDurationU32> = Lazy::new(|| 100_u32.millis());
 struct Machine {
     pub delay: Option<Delay>,
     pub alarm_0: Alarm0,
-    pub led_pin: Pin<bank0::Gpio25, FunctionSioOutput, PullDown>,
+    pub led_system: Pin<bank0::Gpio25, FunctionSioOutput, PullDown>,
+    pub led_user1: Pin<bank0::Gpio16, FunctionSioOutput, PullDown>,
+    pub led_user2: Pin<bank0::Gpio17, FunctionSioOutput, PullDown>,
     pub button_1: Pin<bank0::Gpio3, FunctionSioInput, PullUp>,
     pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
     pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
@@ -95,7 +97,9 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
         &mut pac.RESETS,
     );
 
-    let led_pin = pins.led.into_push_pull_output();
+    let led_system = pins.led.into_push_pull_output();
+    let led_user1 = pins.gpio16.into_push_pull_output();
+    let led_user2 = pins.gpio17.into_push_pull_output();
     let button_1 = pins.gpio3.into_pull_up_input();
     let button_2 = pins.gpio2.into_pull_up_input();
     let button_3 = pins.gpio4.into_pull_up_input();
@@ -106,7 +110,9 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
 
     let mut m = Machine {
         delay: delay,
-        led_pin: led_pin,
+        led_system: led_system,
+        led_user1: led_user1,
+        led_user2: led_user2,
         button_1: button_1,
         button_2: button_2,
         button_3: button_3,
@@ -139,7 +145,7 @@ fn TIMER_IRQ_0() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         m.alarm_0.clear_interrupt();
-        if let Err(e) = m.led_pin.toggle() {
+        if let Err(e) = m.led_system.toggle() {
             warn!("Error while interrupt: {:?}", e);
         }
         m.reset_timer();
@@ -152,10 +158,12 @@ fn IO_IRQ_BANK0() {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         if m.button_1.interrupt_status(EdgeLow) {
             info!("Button1 pressed");
+            let _ = m.led_user1.toggle();
             m.button_1.clear_interrupt(EdgeLow);
         }
         if m.button_2.interrupt_status(EdgeLow) {
             info!("Button2 pressed");
+            let _ = m.led_user2.toggle();
             m.button_2.clear_interrupt(EdgeLow);
         }
         if m.button_3.interrupt_status(EdgeLow) {
