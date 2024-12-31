@@ -7,12 +7,12 @@
 use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::OutputPin;
+use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 use panic_probe as _;
 
 // Provide an alias for our BSP so we can switch targets quickly.
 // Uncomment the BSP you included in Cargo.toml, the rest of the code does not need to change.
-use rp_pico as bsp;
+use rp_pico::{self as bsp, hal::timer::Alarm};
 // use sparkfun_pro_micro_rp2040 as bsp;
 
 use bsp::hal::{
@@ -21,6 +21,24 @@ use bsp::hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
+
+use core::cell::RefCell;
+use critical_section::Mutex;
+use fugit::MicrosDurationU32;
+use pac::interrupt;
+
+type LedAndAlarm = (
+    bsp::hal::gpio::Pin<
+        bsp::hal::gpio::bank0::Gpio25,
+        bsp::hal::gpio::FunctionSioOutput,
+        bsp::hal::gpio::PullDown,
+    >,
+    bsp::hal::timer::Alarm0,
+);
+
+static mut LED_AND_ALARM: Mutex<RefCell<Option<LedAndAlarm>>> = Mutex::new(RefCell::new(None));
+
+const FAST_BLINK_INTERVAL_US: MicrosDurationU32 = MicrosDurationU32::millis(10);
 
 #[entry]
 fn main() -> ! {
@@ -62,16 +80,59 @@ fn main() -> ! {
     // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
     // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
     // in series with the LED.
-    let mut led_pin = pins.led.into_push_pull_output();
+    let led_pin = pins.led.into_push_pull_output();
+
+    let mut timer = bsp::hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+
+    critical_section::with(|cs| {
+        let mut alarm = timer.alarm_0().unwrap();
+        let _ = alarm.schedule(FAST_BLINK_INTERVAL_US);
+        alarm.enable_interrupt();
+        unsafe {
+            LED_AND_ALARM.borrow(cs).replace(Some((led_pin, alarm)));
+        }
+    });
+    unsafe {
+        pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
+    }
 
     loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        // info!("on!");
+        // led_pin.set_high().unwrap();
+        // delay.delay_ms(500);
+        // info!("off!");
+        // led_pin.set_low().unwrap();
+        delay.delay_ms(100);
     }
+}
+
+#[interrupt]
+fn TIMER_IRQ_0() {
+    // (7)
+    critical_section::with(|cs| {
+        let ledalarm = unsafe { LED_AND_ALARM.borrow(cs).take() };
+        if let Some((mut led, mut alarm)) = ledalarm {
+            alarm.clear_interrupt();
+            let _ = alarm.schedule(FAST_BLINK_INTERVAL_US);
+
+            unsafe {
+                static mut COUNT: u8 = 0;
+                COUNT += 1;
+                if 9 < COUNT {
+                    COUNT = 0;
+                    // Blink the LED so we know we hit this interrupt
+                    led.toggle().unwrap();
+                }
+            }
+
+            // Return LED_AND_ALARM into our static variable
+            unsafe {
+                LED_AND_ALARM
+                    .borrow(cs)
+                    .replace_with(|_| Some((led, alarm)));
+            }
+        }
+    });
 }
 
 // End of file
