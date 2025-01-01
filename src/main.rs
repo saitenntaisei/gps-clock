@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+use heapless::consts::*;
+use heapless::Vec;
+
 // Entry point
 use bsp::entry;
 // Logging support
@@ -8,7 +11,7 @@ use defmt::*;
 use defmt_rtt as _;
 
 use embedded_hal::digital::StatefulOutputPin;
-use embedded_hal_nb::serial::{Read, Write};
+use embedded_hal_nb::serial::Read;
 
 // Panic handler
 use panic_probe as _;
@@ -61,6 +64,22 @@ struct Machine {
     pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
     pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
     pub uart: Uart,
+}
+
+struct UartData {
+    data: Vec<u8, U256>,
+}
+
+impl UartData {
+    pub fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+    pub fn push(&mut self, byte: u8) {
+        self.data.push(byte).unwrap();
+    }
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
 }
 
 impl Machine {
@@ -128,13 +147,16 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     let led_system = pins.led.into_push_pull_output();
     let led_user1 = pins.gpio16.into_push_pull_output();
     let led_user2 = pins.gpio17.into_push_pull_output();
-    let button_1 = pins.gpio3.into_pull_up_input();
-    let button_2 = pins.gpio2.into_pull_up_input();
-    let button_3 = pins.gpio4.into_pull_up_input();
+    let mut button_1 = pins.gpio3.into_pull_up_input();
+    let mut button_2 = pins.gpio2.into_pull_up_input();
+    let mut button_3 = pins.gpio4.into_pull_up_input();
 
     button_1.set_interrupt_enabled(EdgeLow, true);
     button_2.set_interrupt_enabled(EdgeLow, true);
     button_3.set_interrupt_enabled(EdgeLow, true);
+    button_1.clear_interrupt(EdgeLow);
+    button_2.clear_interrupt(EdgeLow);
+    button_3.clear_interrupt(EdgeLow);
 
     let mut m = Machine {
         delay,
@@ -152,12 +174,18 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     Mutex::new(RefCell::new(m))
 });
 
+static UART_DATA: Lazy<Mutex<RefCell<UartData>>> = Lazy::new(|| {
+    let uart = UartData::new();
+    Mutex::new(RefCell::new(uart))
+});
+
 #[entry]
 fn main() -> ! {
     info!("Program start");
 
     let mut delay =
         cortex_m::interrupt::free(|cs| MACHINE.borrow(cs).borrow_mut().delay.take().unwrap());
+    delay.delay_ms(100);
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0);
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
@@ -208,8 +236,19 @@ fn IO_IRQ_BANK0() {
 fn UART0_IRQ() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
+        let mut uart_data = UART_DATA.borrow(cs).borrow_mut();
+        // let mut xs: Vec<u8, U256> = Vec::new();
         while let Ok(byte) = m.uart.read() {
-            let _ = m.uart.write(byte);
+            uart_data.push(byte);
+
+            if byte == b'\n' || byte == b'\r' {
+                // let _ = m.uart.write_full_blocking(&uart_data.data);
+                info!(
+                    "Received: {:?}",
+                    core::str::from_utf8(&uart_data.data).unwrap()
+                );
+                uart_data.clear();
+            }
         }
     });
 
