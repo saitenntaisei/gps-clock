@@ -15,9 +15,9 @@ use embedded_hal_nb::serial::Read;
 
 // Panic handler
 use panic_probe as _;
-
 use rp_pico::{
     self as bsp, // alias for the BSP
+    hal::rtc::DateTime,
     hal::timer::Alarm,
     hal::timer::Alarm0,
     hal::timer::Timer,
@@ -70,6 +70,160 @@ struct UartData {
     data: Vec<u8, U256>,
 }
 
+struct GpsData {
+    pub latitude: f32,
+    pub longitude: f32,
+    pub utc_datetime: DateTime,
+    pub status: bool,
+}
+
+pub trait DateTimeExt {
+    fn add_1024_weeks(&mut self);
+}
+
+impl DateTimeExt for DateTime {
+    fn add_1024_weeks(&mut self) {
+        let days_to_add = 1024 * 7;
+        for _ in 0..days_to_add {
+            self.day += 1;
+            if self.day > days_in_month(self.year, self.month) {
+                self.day = 1;
+                self.month += 1;
+                if self.month > 12 {
+                    self.month = 1;
+                    self.year += 1;
+                }
+            }
+        }
+    }
+}
+
+fn days_in_month(year: u16, month: u8) -> u8 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            // Very simple leap check
+            if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 31,
+    }
+}
+
+impl GpsData {
+    pub fn new() -> Self {
+        Self {
+            latitude: 0.0,
+            longitude: 0.0,
+            utc_datetime: bsp::hal::rtc::DateTime {
+                year: 2025,
+                month: 1,
+                day: 1,
+                day_of_week: bsp::hal::rtc::DayOfWeek::Wednesday,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            },
+            status: false,
+        }
+    }
+
+    pub fn init_settings(uart: &mut Uart) {
+        // send b"PSRF106，21*0F"
+        uart.write_full_blocking(b"$PSRF106,21*0F\r\n");
+    }
+    pub fn parse_data(&mut self, data: &[u8]) {
+        // let gps = GpsData::new();
+        let mut iter = data.split(|&x| x == b',');
+        let data = iter.next().unwrap();
+
+        if core::str::from_utf8(data).unwrap() != "$GPRMC" {
+            return;
+        }
+
+        let utc = iter.next().unwrap();
+        self.utc_datetime.hour = core::str::from_utf8(&utc[0..2])
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        self.utc_datetime.minute = core::str::from_utf8(&utc[2..4])
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        self.utc_datetime.second = core::str::from_utf8(&utc[4..6])
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+
+        debug!("hour: {:?}", self.utc_datetime.hour);
+        debug!("minute: {:?}", self.utc_datetime.minute);
+        debug!("second: {:?}", self.utc_datetime.second);
+
+        let status = iter.next().unwrap();
+        if core::str::from_utf8(status).unwrap() == "A" {
+            self.status = true;
+        } else {
+            self.status = false;
+        }
+
+        let latitude_abs = iter.next().unwrap();
+        let latitude_abs = core::str::from_utf8(latitude_abs)
+            .unwrap()
+            .parse::<f32>()
+            .unwrap()
+            / 100.0;
+        let north_or_south = iter.next().unwrap();
+        if core::str::from_utf8(north_or_south).unwrap() == "S" {
+            self.latitude = -latitude_abs;
+        } else if core::str::from_utf8(north_or_south).unwrap() == "N" {
+            self.latitude = latitude_abs;
+        } else {
+            core::panic!("Invalid latitude direction");
+        }
+        let longitude_abs = iter.next().unwrap();
+        let longitude_abs = core::str::from_utf8(longitude_abs)
+            .unwrap()
+            .parse::<f32>()
+            .unwrap()
+            / 100.0;
+        let east_or_west = iter.next().unwrap();
+        if core::str::from_utf8(east_or_west).unwrap() == "W" {
+            self.longitude = -longitude_abs;
+        } else if core::str::from_utf8(east_or_west).unwrap() == "E" {
+            self.longitude = longitude_abs;
+        } else {
+            core::panic!("Invalid longitude direction");
+        }
+
+        info!("latitude: {:?}", self.latitude);
+        info!("longitude: {:?}", self.longitude);
+
+        let _ = iter.next();
+        let _ = iter.next();
+        let date = iter.next().unwrap();
+        self.utc_datetime.day = core::str::from_utf8(&date[0..2])
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        self.utc_datetime.month = core::str::from_utf8(&date[2..4])
+            .unwrap()
+            .parse::<u8>()
+            .unwrap();
+        self.utc_datetime.year = core::str::from_utf8(&date[4..6])
+            .unwrap()
+            .parse::<u16>()
+            .unwrap()
+            + 2000;
+        self.utc_datetime.add_1024_weeks();
+        debug!("day: {:?}", self.utc_datetime.day);
+        debug!("month: {:?}", self.utc_datetime.month);
+        debug!("year: {:?}", self.utc_datetime.year);
+    }
+}
+
 impl UartData {
     pub fn new() -> Self {
         Self { data: Vec::new() }
@@ -92,8 +246,8 @@ impl Machine {
     fn enable_uart(&mut self) {
         self.uart.enable_rx_interrupt();
 
-        self.uart
-            .write_full_blocking(b"uart_interrupt example started...\n");
+        // self.uart
+        //     .write_full_blocking(b"uart_interrupt example started...\n");
     }
 }
 
@@ -174,6 +328,11 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     Mutex::new(RefCell::new(m))
 });
 
+static GPS_DATA: Lazy<Mutex<RefCell<GpsData>>> = Lazy::new(|| {
+    let gps = GpsData::new();
+    Mutex::new(RefCell::new(gps))
+});
+
 static UART_DATA: Lazy<Mutex<RefCell<UartData>>> = Lazy::new(|| {
     let uart = UartData::new();
     Mutex::new(RefCell::new(uart))
@@ -185,14 +344,21 @@ fn main() -> ! {
 
     let mut delay =
         cortex_m::interrupt::free(|cs| MACHINE.borrow(cs).borrow_mut().delay.take().unwrap());
+
     delay.delay_ms(100);
+
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0);
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0);
         pac::NVIC::unmask(pac::Interrupt::UART0_IRQ);
     }
 
-    delay.delay_ms(100);
+    delay.delay_ms(1000);
+
+    cortex_m::interrupt::free(|cs| {
+        let mut m = MACHINE.borrow(cs).borrow_mut();
+        GpsData::init_settings(&mut m.uart);
+    });
 
     loop {
         cortex_m::asm::wfi();
@@ -237,18 +403,22 @@ fn UART0_IRQ() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         let mut uart_data = UART_DATA.borrow(cs).borrow_mut();
+        let mut gps = GPS_DATA.borrow(cs).borrow_mut();
         // let mut xs: Vec<u8, U256> = Vec::new();
         while let Ok(byte) = m.uart.read() {
-            uart_data.push(byte);
-
             if byte == b'\n' || byte == b'\r' {
                 // let _ = m.uart.write_full_blocking(&uart_data.data);
-                info!(
-                    "Received: {:?}",
-                    core::str::from_utf8(&uart_data.data).unwrap()
-                );
+                // info!(
+                //     "Received: {:?}",
+                //     core::str::from_utf8(&uart_data.data).unwrap()
+                // );
+                if !uart_data.data.is_empty() {
+                    gps.parse_data(&uart_data.data);
+                }
                 uart_data.clear();
+                continue;
             }
+            uart_data.push(byte);
         }
     });
 
