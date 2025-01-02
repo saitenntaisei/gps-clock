@@ -245,9 +245,6 @@ impl Machine {
     }
     fn enable_uart(&mut self) {
         self.uart.enable_rx_interrupt();
-
-        // self.uart
-        //     .write_full_blocking(b"uart_interrupt example started...\n");
     }
 }
 
