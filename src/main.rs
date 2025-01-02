@@ -401,7 +401,6 @@ fn UART0_IRQ() {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         let mut uart_data = UART_DATA.borrow(cs).borrow_mut();
         let mut gps = GPS_DATA.borrow(cs).borrow_mut();
-        // let mut xs: Vec<u8, U256> = Vec::new();
         while let Ok(byte) = m.uart.read() {
             if byte == b'\n' || byte == b'\r' {
                 // let _ = m.uart.write_full_blocking(&uart_data.data);
