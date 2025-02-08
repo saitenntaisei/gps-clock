@@ -490,11 +490,6 @@ fn UART0_IRQ() {
         let mut gps = GPS_DATA.borrow(cs).borrow_mut();
         while let Ok(byte) = m.uart.read() {
             if byte == b'\n' || byte == b'\r' {
-                // let _ = m.uart.write_full_blocking(&uart_data.data);
-                // info!(
-                //     "Received: {:?}",
-                //     core::str::from_utf8(&uart_data.data).unwrap()
-                // );
                 if !uart_data.data.is_empty() {
                     gps.parse_data(&uart_data.data);
                 }
