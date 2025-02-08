@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use embedded_hal::digital::OutputPin;
 use heapless::consts::*;
 use heapless::Vec;
 
@@ -35,8 +36,8 @@ use core::cell::RefCell;
 
 use bsp::hal::gpio::bank0;
 use bsp::hal::gpio::{
-    FunctionSioInput, FunctionSioOutput, FunctionUart, Interrupt::EdgeLow, Pin, PullDown, PullNone,
-    PullUp,
+    FunctionSioInput, FunctionSioOutput, FunctionUart, Interrupt::EdgeLow, Pin, PinState, PullDown,
+    PullNone, PullUp,
 };
 use bsp::hal::uart;
 use bsp::hal::uart::{DataBits, StopBits, UartConfig};
@@ -64,6 +65,54 @@ struct Machine {
     pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
     pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
     pub uart: Uart,
+    pub srclk_reset: Pin<bank0::Gpio23, FunctionSioOutput, PullDown>,
+    pub srclk: Pin<bank0::Gpio24, FunctionSioOutput, PullDown>,
+    pub rclk: Pin<bank0::Gpio26, FunctionSioOutput, PullDown>,
+    pub ser1: Pin<bank0::Gpio27, FunctionSioOutput, PullDown>,
+    pub ser2: Pin<bank0::Gpio28, FunctionSioOutput, PullDown>,
+    pub ser3: Pin<bank0::Gpio7, FunctionSioOutput, PullDown>,
+    pub ser4: Pin<bank0::Gpio8, FunctionSioOutput, PullDown>,
+    pub ser5: Pin<bank0::Gpio9, FunctionSioOutput, PullDown>,
+}
+
+trait Display {
+    fn shift(&mut self, data: &[u8]);
+    fn disp(&mut self);
+}
+
+impl Display for Machine {
+    fn shift(&mut self, data: &[u8]) {
+        {
+            let sers = self.ser_pins_as_trait();
+
+            if sers.len() != data.len() {
+                core::panic!("Data length does not match number of shift registers");
+            }
+        }
+
+        for bit_index in 0..8 {
+            {
+                // このスコープ内にピンの借用を閉じ込める
+                let mut sers = self.ser_pins_as_trait();
+                for (ser, byte) in sers.iter_mut().zip(data.iter()) {
+                    let bit = (*byte >> bit_index) & 1;
+                    let state = if bit == 1 {
+                        PinState::High
+                    } else {
+                        PinState::Low
+                    };
+                    ser.set_state(state).unwrap();
+                }
+                // スコープを抜けると sers はドロップされる
+            }
+            // ここではピンの借用がなくなっているので、safe に blink_srclk() を呼べる
+            self.blink_srclk();
+        }
+    }
+
+    fn disp(&mut self) {
+        self.blink_rclk()
+    }
 }
 
 struct UartData {
@@ -246,6 +295,28 @@ impl Machine {
     fn enable_uart(&mut self) {
         self.uart.enable_rx_interrupt();
     }
+
+    pub fn ser_pins_as_trait(
+        &mut self,
+    ) -> [&mut dyn OutputPin<Error = core::convert::Infallible>; 5] {
+        [
+            &mut self.ser1,
+            &mut self.ser2,
+            &mut self.ser3,
+            &mut self.ser4,
+            &mut self.ser5,
+        ]
+    }
+
+    pub fn blink_srclk(&mut self) {
+        self.srclk.set_state(PinState::High).unwrap();
+        self.srclk.set_state(PinState::Low).unwrap();
+    }
+    pub fn blink_rclk(&mut self) {
+        self.rclk.set_state(PinState::High).unwrap();
+
+        self.rclk.set_state(PinState::Low).unwrap();
+    }
 }
 
 static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
@@ -301,6 +372,16 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     let mut button_1 = pins.gpio3.into_pull_up_input();
     let mut button_2 = pins.gpio2.into_pull_up_input();
     let mut button_3 = pins.gpio4.into_pull_up_input();
+    let srclk_reset = pins
+        .b_power_save
+        .into_push_pull_output_in_state(PinState::High);
+    let srclk = pins.vbus_detect.into_push_pull_output();
+    let rclk = pins.gpio26.into_push_pull_output();
+    let ser1 = pins.gpio27.into_push_pull_output();
+    let ser2 = pins.gpio28.into_push_pull_output();
+    let ser3 = pins.gpio7.into_push_pull_output();
+    let ser4 = pins.gpio8.into_push_pull_output();
+    let ser5 = pins.gpio9.into_push_pull_output();
 
     button_1.set_interrupt_enabled(EdgeLow, true);
     button_2.set_interrupt_enabled(EdgeLow, true);
@@ -319,6 +400,14 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
         button_3,
         alarm_0,
         uart,
+        srclk_reset,
+        srclk,
+        rclk,
+        ser1,
+        ser2,
+        ser3,
+        ser4,
+        ser5,
     };
     m.reset_timer();
     m.enable_uart();
@@ -370,6 +459,9 @@ fn TIMER_IRQ_0() {
         if let Err(e) = m.led_system.toggle() {
             warn!("Error while interrupt: {:?}", e);
         }
+
+        m.shift([0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111].as_ref());
+        m.disp();
         m.reset_timer();
     });
 }
