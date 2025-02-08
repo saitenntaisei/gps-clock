@@ -65,7 +65,6 @@ struct Machine {
     pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
     pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
     pub uart: Uart,
-    pub srclk_reset: Pin<bank0::Gpio23, FunctionSioOutput, PullDown>,
     pub srclk: Pin<bank0::Gpio24, FunctionSioOutput, PullDown>,
     pub rclk: Pin<bank0::Gpio26, FunctionSioOutput, PullDown>,
     pub ser1: Pin<bank0::Gpio27, FunctionSioOutput, PullDown>,
@@ -372,9 +371,6 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     let mut button_1 = pins.gpio3.into_pull_up_input();
     let mut button_2 = pins.gpio2.into_pull_up_input();
     let mut button_3 = pins.gpio4.into_pull_up_input();
-    let srclk_reset = pins
-        .b_power_save
-        .into_push_pull_output_in_state(PinState::High);
     let srclk = pins.vbus_detect.into_push_pull_output();
     let rclk = pins.gpio26.into_push_pull_output();
     let ser1 = pins.gpio27.into_push_pull_output();
@@ -400,7 +396,6 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
         button_3,
         alarm_0,
         uart,
-        srclk_reset,
         srclk,
         rclk,
         ser1,
