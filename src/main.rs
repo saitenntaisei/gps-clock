@@ -211,11 +211,8 @@ impl GpsData {
         debug!("second: {:?}", self.utc_datetime.second);
 
         let status = iter.next().unwrap();
-        if core::str::from_utf8(status).unwrap() == "A" {
-            self.status = true;
-        } else {
-            self.status = false;
-        }
+
+        self.status = core::str::from_utf8(status).unwrap() == "A";
 
         let latitude_abs = iter.next().unwrap();
         let latitude_abs = core::str::from_utf8(latitude_abs)
