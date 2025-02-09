@@ -163,6 +163,22 @@ fn days_in_month(year: u16, month: u8) -> u8 {
     }
 }
 
+fn convert_number_to_bits(number: u8) -> u8 {
+    match number {
+        0 => 0b01111011,
+        1 => 0b01100000,
+        2 => 0b01010111,
+        3 => 0b01110110,
+        4 => 0b01101100,
+        5 => 0b00111110,
+        6 => 0b00111111,
+        7 => 0b01110000,
+        8 => 0b01111111,
+        9 => 0b01111110,
+        _ => 0,
+    }
+}
+
 impl GpsData {
     pub fn new() -> Self {
         Self {
@@ -458,7 +474,16 @@ fn TIMER_IRQ_0() {
             warn!("Error while interrupt: {:?}", e);
         }
 
-        m.shift([0b11111111, 0b11111111, 0b11111111, 0b11111111, 0b11111111].as_ref());
+        m.shift(
+            [
+                convert_number_to_bits(7),
+                0b11111111,
+                0b11111111,
+                0b11111111,
+                0b11111111,
+            ]
+            .as_ref(),
+        );
         m.disp();
         m.reset_timer();
     });
