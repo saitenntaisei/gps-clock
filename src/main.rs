@@ -65,6 +65,7 @@ struct Machine {
     pub button_2: Pin<bank0::Gpio2, FunctionSioInput, PullUp>,
     pub button_3: Pin<bank0::Gpio4, FunctionSioInput, PullUp>,
     pub uart: Uart,
+    #[allow(dead_code)]
     pub srclk_reset: Pin<bank0::Gpio23, FunctionSioOutput, PullDown>,
     pub srclk: Pin<bank0::Gpio24, FunctionSioOutput, PullDown>,
     pub rclk: Pin<bank0::Gpio26, FunctionSioOutput, PullDown>,
