@@ -46,6 +46,20 @@ use cortex_m::interrupt::Mutex;
 use fugit::{ExtU32, MicrosDurationU32, RateExtU32};
 use once_cell::sync::Lazy;
 
+#[derive(Copy, Clone, defmt::Format)]
+enum DisplayMode {
+    LongHigh,
+    LongLow,
+    LatHigh,
+    LatLow,
+    Time,
+    Date,
+    Year,
+}
+
+static DISPLAY_MODE: Lazy<Mutex<RefCell<DisplayMode>>> =
+    Lazy::new(|| Mutex::new(RefCell::new(DisplayMode::Time)));
+
 type UartPins = (
     Pin<bank0::Gpio0, FunctionUart, PullNone>,
     Pin<bank0::Gpio1, FunctionUart, PullNone>,
@@ -93,7 +107,6 @@ impl Display for Machine {
 
         for bit_index in 0..8 {
             {
-                // このスコープ内にピンの借用を閉じ込める
                 let mut sers = self.ser_pins_as_trait();
                 for (ser, byte) in sers.iter_mut().zip(data.iter()) {
                     let bit = (*byte >> bit_index) & 1;
@@ -104,9 +117,7 @@ impl Display for Machine {
                     };
                     ser.set_state(state).unwrap();
                 }
-                // スコープを抜けると sers はドロップされる
             }
-            // ここではピンの借用がなくなっているので、safe に blink_srclk() を呼べる
             self.blink_srclk();
         }
     }
@@ -474,16 +485,107 @@ fn TIMER_IRQ_0() {
             warn!("Error while interrupt: {:?}", e);
         }
 
-        m.shift(
-            [
-                convert_number_to_bits(7),
-                0b11111111,
-                0b11111111,
-                0b11111111,
-                0b11111111,
-            ]
-            .as_ref(),
-        );
+        let digits;
+        let mode = *DISPLAY_MODE.borrow(cs).borrow();
+        let gps = GPS_DATA.borrow(cs).borrow();
+        match mode {
+            DisplayMode::LongHigh => {
+                let longitude_degree = gps.longitude as u8;
+                let longitude_for_google = (longitude_degree as f32)
+                    + (gps.longitude - (longitude_degree as f32)) * 100.0 / 60.0;
+                let long_high = (longitude_for_google * 100.0) as u16;
+                digits = [
+                    convert_number_to_bits((long_high / 10000) as u8),
+                    convert_number_to_bits(((long_high / 1000) % 10) as u8),
+                    convert_number_to_bits(((long_high / 100) % 10) as u8),
+                    convert_number_to_bits(((long_high / 10) % 10) as u8),
+                    convert_number_to_bits((long_high % 10) as u8),
+                ];
+            }
+            DisplayMode::LongLow => {
+                let longitude_degree = gps.longitude as u8;
+                let longitude_for_google = (longitude_degree as f32)
+                    + (gps.longitude - (longitude_degree as f32)) * 100.0 / 60.0;
+                let long_high = (longitude_for_google * 100.0) as u16;
+                let long_low = (((longitude_for_google * 100.0) - (long_high as f32)) * 1e5) as u16;
+                digits = [
+                    convert_number_to_bits((long_low / 10000) as u8),
+                    convert_number_to_bits(((long_low / 1000) % 10) as u8),
+                    convert_number_to_bits(((long_low / 100) % 10) as u8),
+                    convert_number_to_bits(((long_low / 10) % 10) as u8),
+                    convert_number_to_bits((long_low % 10) as u8),
+                ];
+            }
+            DisplayMode::LatHigh => {
+                let latitude_degree = gps.latitude as u8;
+                let latitude_for_google = (latitude_degree as f32)
+                    + (gps.latitude - (latitude_degree as f32)) * 100.0 / 60.0;
+                let lat_high = (latitude_for_google * 100.0) as u16;
+                digits = [
+                    convert_number_to_bits((lat_high / 10000) as u8),
+                    convert_number_to_bits(((lat_high / 1000) % 10) as u8),
+                    convert_number_to_bits(((lat_high / 100) % 10) as u8),
+                    convert_number_to_bits(((lat_high / 10) % 10) as u8),
+                    convert_number_to_bits((lat_high % 10) as u8),
+                ];
+            }
+            DisplayMode::LatLow => {
+                let latitude_degree = gps.latitude as u8;
+                let latitude_for_google = (latitude_degree as f32)
+                    + (gps.latitude - (latitude_degree as f32)) * 100.0 / 60.0;
+                let lat_high = (latitude_for_google * 100.0) as u16;
+                let lat_low = (((latitude_for_google * 100.0) - (lat_high as f32)) * 1e5) as u16;
+                digits = [
+                    convert_number_to_bits((lat_low / 10000) as u8),
+                    convert_number_to_bits(((lat_low / 1000) % 10) as u8),
+                    convert_number_to_bits(((lat_low / 100) % 10) as u8),
+                    convert_number_to_bits(((lat_low / 10) % 10) as u8),
+                    convert_number_to_bits((lat_low % 10) as u8),
+                ];
+            }
+            DisplayMode::Time => {
+                let hour = gps.utc_datetime.hour;
+                let minute = gps.utc_datetime.minute;
+                digits = [
+                    0,
+                    convert_number_to_bits(hour / 10),
+                    convert_number_to_bits(hour % 10),
+                    convert_number_to_bits(minute / 10),
+                    convert_number_to_bits(minute % 10),
+                ];
+            }
+
+            DisplayMode::Date => {
+                let day = gps.utc_datetime.day;
+                let month = gps.utc_datetime.month;
+                digits = [
+                    0,
+                    convert_number_to_bits(day / 10),
+                    convert_number_to_bits(day % 10),
+                    convert_number_to_bits(month / 10),
+                    convert_number_to_bits(month % 10),
+                ];
+            }
+            DisplayMode::Year => {
+                // Display year as 4 digits with blank in the middle.
+                let year = gps.utc_datetime.year;
+                let first_two = year / 100;
+                let last_two = year % 100;
+                let d1: u8 = (first_two / 10) as u8;
+                let d2: u8 = (first_two % 10) as u8;
+                let d3: u8 = (last_two / 10) as u8;
+                let d4: u8 = (last_two % 10) as u8;
+                digits = [
+                    0,
+                    convert_number_to_bits(d1),
+                    convert_number_to_bits(d2),
+                    convert_number_to_bits(d3),
+                    convert_number_to_bits(d4),
+                ];
+            }
+        }
+
+        m.shift(&digits);
         m.disp();
         m.reset_timer();
     });
@@ -494,17 +596,40 @@ fn IO_IRQ_BANK0() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         if m.button_1.interrupt_status(EdgeLow) {
-            info!("Button1 pressed");
-            let _ = m.led_user1.toggle();
+            cortex_m::interrupt::free(|cs2| {
+                let current = *DISPLAY_MODE.borrow(cs2).borrow();
+                let new_mode = match current {
+                    DisplayMode::LongHigh => DisplayMode::LongLow,
+                    _ => DisplayMode::LongHigh,
+                };
+                *DISPLAY_MODE.borrow(cs2).borrow_mut() = new_mode;
+            });
+            // let _ = m.led_user1.toggle();
             m.button_1.clear_interrupt(EdgeLow);
         }
         if m.button_2.interrupt_status(EdgeLow) {
-            info!("Button2 pressed");
-            let _ = m.led_user2.toggle();
+            cortex_m::interrupt::free(|cs2| {
+                let current = *DISPLAY_MODE.borrow(cs2).borrow();
+                let new_mode = match current {
+                    DisplayMode::LatHigh => DisplayMode::LatLow,
+                    _ => DisplayMode::LatHigh,
+                };
+                *DISPLAY_MODE.borrow(cs2).borrow_mut() = new_mode;
+            });
+            // let _ = m.led_user2.toggle();
             m.button_2.clear_interrupt(EdgeLow);
         }
         if m.button_3.interrupt_status(EdgeLow) {
-            info!("Button3 pressed");
+            // Toggle between Time and Year modes.
+            cortex_m::interrupt::free(|cs2| {
+                let current = *DISPLAY_MODE.borrow(cs2).borrow();
+                let new_mode = match current {
+                    DisplayMode::Time => DisplayMode::Date,
+                    DisplayMode::Date => DisplayMode::Year,
+                    _ => DisplayMode::Time,
+                };
+                *DISPLAY_MODE.borrow(cs2).borrow_mut() = new_mode;
+            });
             m.button_3.clear_interrupt(EdgeLow);
         }
     });
