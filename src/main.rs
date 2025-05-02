@@ -482,6 +482,13 @@ fn TIMER_IRQ_0() {
         let digits;
         let mode = *DISPLAY_MODE.borrow(cs).borrow();
         let gps = GPS_DATA.borrow(cs).borrow();
+
+        if gps.status {
+            m.led_user1.toggle().unwrap();
+        } else {
+            m.led_user1.set_low().unwrap();
+        }
+
         match mode {
             DisplayMode::LongHigh => {
                 let longitude_degree = gps.longitude as u8;
