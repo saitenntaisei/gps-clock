@@ -33,6 +33,7 @@ use bsp::hal::{
 };
 
 use core::cell::RefCell;
+use core::time;
 
 use bsp::hal::gpio::bank0;
 use bsp::hal::gpio::{
@@ -46,7 +47,7 @@ use cortex_m::interrupt::Mutex;
 use fugit::{ExtU32, MicrosDurationU32, RateExtU32};
 use once_cell::sync::Lazy;
 
-#[derive(Copy, Clone, defmt::Format)]
+#[derive(Copy, Clone, defmt::Format, PartialEq)]
 enum DisplayMode {
     LongHigh,
     LongLow,
@@ -55,10 +56,13 @@ enum DisplayMode {
     Time,
     Date,
     Year,
+    TimeOffset,
 }
 
 static DISPLAY_MODE: Lazy<Mutex<RefCell<DisplayMode>>> =
     Lazy::new(|| Mutex::new(RefCell::new(DisplayMode::Time)));
+
+static TIME_OFFSET: Lazy<Mutex<RefCell<u8>>> = Lazy::new(|| Mutex::new(RefCell::new(0)));
 
 type UartPins = (
     Pin<bank0::Gpio0, FunctionUart, PullNone>,
@@ -271,7 +275,6 @@ impl GpsData {
         } else {
             core::panic!("Invalid longitude direction");
         }
-
         let _ = iter.next();
         let _ = iter.next();
         let date = iter.next().unwrap();
@@ -547,6 +550,8 @@ fn TIMER_IRQ_0() {
             DisplayMode::Time => {
                 let hour = gps.utc_datetime.hour;
                 let minute = gps.utc_datetime.minute;
+                let time_offset = *TIME_OFFSET.borrow(cs).borrow();
+                let hour = (hour + time_offset) % 24;
                 digits = [
                     0,
                     convert_number_to_bits(hour / 10, false),
@@ -557,8 +562,25 @@ fn TIMER_IRQ_0() {
             }
 
             DisplayMode::Date => {
-                let day = gps.utc_datetime.day;
-                let month = gps.utc_datetime.month;
+                let hour = gps.utc_datetime.hour;
+                let time_offset = *TIME_OFFSET.borrow(cs).borrow();
+                let mut day = gps.utc_datetime.day;
+                let mut month = gps.utc_datetime.month;
+                let year = gps.utc_datetime.year;
+                if (hour + time_offset) > 24 {
+                    let days = match month {
+                        4 | 6 | 9 | 11 => 30,
+                        2 if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) => 29,
+                        2 => 28,
+                        _ => 31,
+                    };
+                    day += 1;
+                    if day > days {
+                        day = 1;
+                        month = month % 12 + 1;
+                    }
+                }
+
                 digits = [
                     0,
                     convert_number_to_bits(month / 10, false),
@@ -569,7 +591,25 @@ fn TIMER_IRQ_0() {
             }
             DisplayMode::Year => {
                 // Display year as 4 digits with blank in the middle.
-                let year = gps.utc_datetime.year;
+
+                let hour = gps.utc_datetime.hour;
+                let time_offset = *TIME_OFFSET.borrow(cs).borrow();
+                let day = gps.utc_datetime.day;
+                let month = gps.utc_datetime.month;
+                let mut year = gps.utc_datetime.year;
+                if (hour + time_offset) > 24 {
+                    let days = match month {
+                        4 | 6 | 9 | 11 => 30,
+                        2 if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) => 29,
+                        2 => 28,
+                        _ => 31,
+                    };
+
+                    if day + 1 > days && month == 12 {
+                        year += 1;
+                    }
+                }
+
                 let first_two = year / 100;
                 let last_two = year % 100;
                 let d1: u8 = (first_two / 10) as u8;
@@ -582,6 +622,17 @@ fn TIMER_IRQ_0() {
                     convert_number_to_bits(d2, false),
                     convert_number_to_bits(d3, false),
                     convert_number_to_bits(d4, false),
+                ];
+            }
+
+            DisplayMode::TimeOffset => {
+                let time_offset = *TIME_OFFSET.borrow(cs).borrow();
+                digits = [
+                    0,
+                    convert_number_to_bits(time_offset / 10, false),
+                    convert_number_to_bits(time_offset % 10, true),
+                    0,
+                    0,
                 ];
             }
         }
@@ -599,8 +650,16 @@ fn IO_IRQ_BANK0() {
         if m.button_1.interrupt_status(EdgeLow) {
             cortex_m::interrupt::free(|cs2| {
                 let current = *DISPLAY_MODE.borrow(cs2).borrow();
+
+                if current == DisplayMode::TimeOffset {
+                    let current_time_offset = *TIME_OFFSET.borrow(cs2).borrow();
+                    let new_time_offset = (current_time_offset + 24 - 1) % 24;
+                    *TIME_OFFSET.borrow(cs2).borrow_mut() = new_time_offset;
+                }
+
                 let new_mode = match current {
                     DisplayMode::LongHigh => DisplayMode::LongLow,
+                    DisplayMode::TimeOffset => DisplayMode::TimeOffset,
                     _ => DisplayMode::LongHigh,
                 };
                 *DISPLAY_MODE.borrow(cs2).borrow_mut() = new_mode;
@@ -611,8 +670,16 @@ fn IO_IRQ_BANK0() {
         if m.button_2.interrupt_status(EdgeLow) {
             cortex_m::interrupt::free(|cs2| {
                 let current = *DISPLAY_MODE.borrow(cs2).borrow();
+
+                if current == DisplayMode::TimeOffset {
+                    let current_time_offset = *TIME_OFFSET.borrow(cs2).borrow();
+                    let new_time_offset = (current_time_offset + 1) % 24;
+                    *TIME_OFFSET.borrow(cs2).borrow_mut() = new_time_offset;
+                }
+
                 let new_mode = match current {
                     DisplayMode::LatHigh => DisplayMode::LatLow,
+                    DisplayMode::TimeOffset => DisplayMode::TimeOffset,
                     _ => DisplayMode::LatHigh,
                 };
                 *DISPLAY_MODE.borrow(cs2).borrow_mut() = new_mode;
@@ -627,6 +694,7 @@ fn IO_IRQ_BANK0() {
                 let new_mode = match current {
                     DisplayMode::Time => DisplayMode::Date,
                     DisplayMode::Date => DisplayMode::Year,
+                    DisplayMode::Year => DisplayMode::TimeOffset,
                     _ => DisplayMode::Time,
                 };
                 *DISPLAY_MODE.borrow(cs2).borrow_mut() = new_mode;
