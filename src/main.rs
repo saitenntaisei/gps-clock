@@ -174,8 +174,8 @@ fn days_in_month(year: u16, month: u8) -> u8 {
     }
 }
 
-fn convert_number_to_bits(number: u8) -> u8 {
-    match number {
+fn convert_number_to_bits(number: u8, dot: bool) -> u8 {
+    let mut bits = match number {
         0 => 0b01111011,
         1 => 0b01100000,
         2 => 0b01010111,
@@ -187,7 +187,11 @@ fn convert_number_to_bits(number: u8) -> u8 {
         8 => 0b01111111,
         9 => 0b01111110,
         _ => 0,
+    };
+    if dot {
+        bits |= 0b10000000;
     }
+    bits
 }
 
 impl GpsData {
@@ -235,10 +239,6 @@ impl GpsData {
             .parse::<u8>()
             .unwrap();
 
-        debug!("hour: {:?}", self.utc_datetime.hour);
-        debug!("minute: {:?}", self.utc_datetime.minute);
-        debug!("second: {:?}", self.utc_datetime.second);
-
         let status = iter.next().unwrap();
 
         self.status = core::str::from_utf8(status).unwrap() == "A";
@@ -272,9 +272,6 @@ impl GpsData {
             core::panic!("Invalid longitude direction");
         }
 
-        info!("latitude: {:?}", self.latitude);
-        info!("longitude: {:?}", self.longitude);
-
         let _ = iter.next();
         let _ = iter.next();
         let date = iter.next().unwrap();
@@ -292,9 +289,6 @@ impl GpsData {
             .unwrap()
             + 2000;
         self.utc_datetime.add_1024_weeks();
-        debug!("day: {:?}", self.utc_datetime.day);
-        debug!("month: {:?}", self.utc_datetime.month);
-        debug!("year: {:?}", self.utc_datetime.year);
     }
 }
 
@@ -495,11 +489,11 @@ fn TIMER_IRQ_0() {
                     + (gps.longitude - (longitude_degree as f32)) * 100.0 / 60.0;
                 let long_high = (longitude_for_google * 100.0) as u16;
                 digits = [
-                    convert_number_to_bits((long_high / 10000) as u8),
-                    convert_number_to_bits(((long_high / 1000) % 10) as u8),
-                    convert_number_to_bits(((long_high / 100) % 10) as u8),
-                    convert_number_to_bits(((long_high / 10) % 10) as u8),
-                    convert_number_to_bits((long_high % 10) as u8),
+                    convert_number_to_bits((long_high / 10000) as u8, false),
+                    convert_number_to_bits(((long_high / 1000) % 10) as u8, false),
+                    convert_number_to_bits(((long_high / 100) % 10) as u8, true),
+                    convert_number_to_bits(((long_high / 10) % 10) as u8, false),
+                    convert_number_to_bits((long_high % 10) as u8, false),
                 ];
             }
             DisplayMode::LongLow => {
@@ -509,11 +503,11 @@ fn TIMER_IRQ_0() {
                 let long_high = (longitude_for_google * 100.0) as u16;
                 let long_low = (((longitude_for_google * 100.0) - (long_high as f32)) * 1e5) as u16;
                 digits = [
-                    convert_number_to_bits((long_low / 10000) as u8),
-                    convert_number_to_bits(((long_low / 1000) % 10) as u8),
-                    convert_number_to_bits(((long_low / 100) % 10) as u8),
-                    convert_number_to_bits(((long_low / 10) % 10) as u8),
-                    convert_number_to_bits((long_low % 10) as u8),
+                    convert_number_to_bits((long_low / 10000) as u8, false),
+                    convert_number_to_bits(((long_low / 1000) % 10) as u8, false),
+                    convert_number_to_bits(((long_low / 100) % 10) as u8, false),
+                    convert_number_to_bits(((long_low / 10) % 10) as u8, false),
+                    convert_number_to_bits((long_low % 10) as u8, false),
                 ];
             }
             DisplayMode::LatHigh => {
@@ -522,11 +516,11 @@ fn TIMER_IRQ_0() {
                     + (gps.latitude - (latitude_degree as f32)) * 100.0 / 60.0;
                 let lat_high = (latitude_for_google * 100.0) as u16;
                 digits = [
-                    convert_number_to_bits((lat_high / 10000) as u8),
-                    convert_number_to_bits(((lat_high / 1000) % 10) as u8),
-                    convert_number_to_bits(((lat_high / 100) % 10) as u8),
-                    convert_number_to_bits(((lat_high / 10) % 10) as u8),
-                    convert_number_to_bits((lat_high % 10) as u8),
+                    convert_number_to_bits((lat_high / 10000) as u8, false),
+                    convert_number_to_bits(((lat_high / 1000) % 10) as u8, false),
+                    convert_number_to_bits(((lat_high / 100) % 10) as u8, true),
+                    convert_number_to_bits(((lat_high / 10) % 10) as u8, false),
+                    convert_number_to_bits((lat_high % 10) as u8, false),
                 ];
             }
             DisplayMode::LatLow => {
@@ -536,11 +530,11 @@ fn TIMER_IRQ_0() {
                 let lat_high = (latitude_for_google * 100.0) as u16;
                 let lat_low = (((latitude_for_google * 100.0) - (lat_high as f32)) * 1e5) as u16;
                 digits = [
-                    convert_number_to_bits((lat_low / 10000) as u8),
-                    convert_number_to_bits(((lat_low / 1000) % 10) as u8),
-                    convert_number_to_bits(((lat_low / 100) % 10) as u8),
-                    convert_number_to_bits(((lat_low / 10) % 10) as u8),
-                    convert_number_to_bits((lat_low % 10) as u8),
+                    convert_number_to_bits((lat_low / 10000) as u8, false),
+                    convert_number_to_bits(((lat_low / 1000) % 10) as u8, false),
+                    convert_number_to_bits(((lat_low / 100) % 10) as u8, false),
+                    convert_number_to_bits(((lat_low / 10) % 10) as u8, false),
+                    convert_number_to_bits((lat_low % 10) as u8, false),
                 ];
             }
             DisplayMode::Time => {
@@ -548,10 +542,10 @@ fn TIMER_IRQ_0() {
                 let minute = gps.utc_datetime.minute;
                 digits = [
                     0,
-                    convert_number_to_bits(hour / 10),
-                    convert_number_to_bits(hour % 10),
-                    convert_number_to_bits(minute / 10),
-                    convert_number_to_bits(minute % 10),
+                    convert_number_to_bits(hour / 10, false),
+                    convert_number_to_bits(hour % 10, true),
+                    convert_number_to_bits(minute / 10, false),
+                    convert_number_to_bits(minute % 10, false),
                 ];
             }
 
@@ -560,10 +554,10 @@ fn TIMER_IRQ_0() {
                 let month = gps.utc_datetime.month;
                 digits = [
                     0,
-                    convert_number_to_bits(day / 10),
-                    convert_number_to_bits(day % 10),
-                    convert_number_to_bits(month / 10),
-                    convert_number_to_bits(month % 10),
+                    convert_number_to_bits(month / 10, false),
+                    convert_number_to_bits(month % 10, true),
+                    convert_number_to_bits(day / 10, false),
+                    convert_number_to_bits(day % 10, false),
                 ];
             }
             DisplayMode::Year => {
@@ -577,10 +571,10 @@ fn TIMER_IRQ_0() {
                 let d4: u8 = (last_two % 10) as u8;
                 digits = [
                     0,
-                    convert_number_to_bits(d1),
-                    convert_number_to_bits(d2),
-                    convert_number_to_bits(d3),
-                    convert_number_to_bits(d4),
+                    convert_number_to_bits(d1, false),
+                    convert_number_to_bits(d2, false),
+                    convert_number_to_bits(d3, false),
+                    convert_number_to_bits(d4, false),
                 ];
             }
         }
