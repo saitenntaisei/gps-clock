@@ -478,7 +478,7 @@ fn TIMER_IRQ_0() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
         m.alarm_0.clear_interrupt();
-        if let Err(e) = m.led_system.toggle() {
+        if let Err(e) = m.led_system.set_high() {
             warn!("Error while interrupt: {:?}", e);
         }
 
