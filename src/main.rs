@@ -627,10 +627,8 @@ fn TIMER_IRQ_0() {
                     if day + 1 > days && month == 12 {
                         year += 1;
                     }
-                } else if (hour as i8 + time_offset) < 0 {
-                    if day == 1 && month == 1 {
-                        year -= 1;
-                    }
+                } else if (hour as i8 + time_offset) < 0 && day == 1 && month == 1 {
+                    year -= 1;
                 }
 
                 let first_two = year / 100;
