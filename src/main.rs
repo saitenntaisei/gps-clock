@@ -665,6 +665,7 @@ fn TIMER_IRQ_0() {
 fn IO_IRQ_BANK0() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
+        m.led_user2.set_high().unwrap();
         if m.button_1.interrupt_status(EdgeLow) {
             cortex_m::interrupt::free(|cs2| {
                 let current = *DISPLAY_MODE.borrow(cs2).borrow();
@@ -719,6 +720,7 @@ fn IO_IRQ_BANK0() {
             });
             m.button_3.clear_interrupt(EdgeLow);
         }
+        m.led_user2.set_low().unwrap();
     });
 }
 
