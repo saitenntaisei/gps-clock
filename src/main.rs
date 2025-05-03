@@ -36,8 +36,8 @@ use core::cell::RefCell;
 
 use bsp::hal::gpio::bank0;
 use bsp::hal::gpio::{
-    FunctionSioInput, FunctionSioOutput, FunctionUart, Interrupt::EdgeLow, Pin, PinState, PullDown,
-    PullNone, PullUp,
+    FunctionSioInput, FunctionSioOutput, FunctionUart, Interrupt::EdgeHigh, Interrupt::EdgeLow,
+    Pin, PinState, PullDown, PullNone, PullUp,
 };
 use bsp::hal::uart;
 use bsp::hal::uart::{DataBits, StopBits, UartConfig};
@@ -407,9 +407,16 @@ static MACHINE: Lazy<Mutex<RefCell<Machine>>> = Lazy::new(|| {
     button_1.set_interrupt_enabled(EdgeLow, true);
     button_2.set_interrupt_enabled(EdgeLow, true);
     button_3.set_interrupt_enabled(EdgeLow, true);
+    button_1.set_interrupt_enabled(EdgeHigh, true);
+    button_2.set_interrupt_enabled(EdgeHigh, true);
+    button_3.set_interrupt_enabled(EdgeHigh, true);
+
     button_1.clear_interrupt(EdgeLow);
     button_2.clear_interrupt(EdgeLow);
     button_3.clear_interrupt(EdgeLow);
+    button_1.clear_interrupt(EdgeHigh);
+    button_2.clear_interrupt(EdgeHigh);
+    button_3.clear_interrupt(EdgeHigh);
 
     let mut m = Machine {
         delay,
@@ -643,7 +650,7 @@ fn TIMER_IRQ_0() {
 
             DisplayMode::TimeOffset => {
                 let time_offset = *TIME_OFFSET.borrow(cs).borrow();
-                let abs_time_offset = time_offset.abs() as u8;
+                let abs_time_offset = time_offset.unsigned_abs();
                 let sign = if time_offset < 0 { 0b00000100 } else { 0 };
                 digits = [
                     sign,
@@ -665,7 +672,12 @@ fn TIMER_IRQ_0() {
 fn IO_IRQ_BANK0() {
     cortex_m::interrupt::free(|cs| {
         let mut m = MACHINE.borrow(cs).borrow_mut();
-        m.led_user2.set_high().unwrap();
+        if m.button_1.interrupt_status(EdgeLow)
+            || m.button_2.interrupt_status(EdgeLow)
+            || m.button_3.interrupt_status(EdgeLow)
+        {
+            m.led_user2.set_high().unwrap();
+        }
         if m.button_1.interrupt_status(EdgeLow) {
             cortex_m::interrupt::free(|cs2| {
                 let current = *DISPLAY_MODE.borrow(cs2).borrow();
@@ -720,7 +732,22 @@ fn IO_IRQ_BANK0() {
             });
             m.button_3.clear_interrupt(EdgeLow);
         }
-        m.led_user2.set_low().unwrap();
+        if m.button_1.interrupt_status(EdgeHigh)
+            || m.button_2.interrupt_status(EdgeHigh)
+            || m.button_3.interrupt_status(EdgeHigh)
+        {
+            m.led_user2.set_low().unwrap();
+        }
+
+        if m.button_1.interrupt_status(EdgeHigh) {
+            m.button_1.clear_interrupt(EdgeHigh);
+        }
+        if m.button_2.interrupt_status(EdgeHigh) {
+            m.button_2.clear_interrupt(EdgeHigh);
+        }
+        if m.button_3.interrupt_status(EdgeHigh) {
+            m.button_3.clear_interrupt(EdgeHigh);
+        }
     });
 }
 
