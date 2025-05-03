@@ -33,7 +33,6 @@ use bsp::hal::{
 };
 
 use core::cell::RefCell;
-use core::time;
 
 use bsp::hal::gpio::bank0;
 use bsp::hal::gpio::{
@@ -62,7 +61,7 @@ enum DisplayMode {
 static DISPLAY_MODE: Lazy<Mutex<RefCell<DisplayMode>>> =
     Lazy::new(|| Mutex::new(RefCell::new(DisplayMode::Time)));
 
-static TIME_OFFSET: Lazy<Mutex<RefCell<u8>>> = Lazy::new(|| Mutex::new(RefCell::new(0)));
+static TIME_OFFSET: Lazy<Mutex<RefCell<i8>>> = Lazy::new(|| Mutex::new(RefCell::new(0)));
 
 type UartPins = (
     Pin<bank0::Gpio0, FunctionUart, PullNone>,
@@ -551,7 +550,7 @@ fn TIMER_IRQ_0() {
                 let hour = gps.utc_datetime.hour;
                 let minute = gps.utc_datetime.minute;
                 let time_offset = *TIME_OFFSET.borrow(cs).borrow();
-                let hour = (hour + time_offset) % 24;
+                let hour = ((hour as i8 + 24 + time_offset) % 24) as u8;
                 digits = [
                     0,
                     convert_number_to_bits(hour / 10, false),
@@ -567,7 +566,8 @@ fn TIMER_IRQ_0() {
                 let mut day = gps.utc_datetime.day;
                 let mut month = gps.utc_datetime.month;
                 let year = gps.utc_datetime.year;
-                if (hour + time_offset) > 24 {
+
+                if (hour as i8 + time_offset) >= 24 {
                     let days = match month {
                         4 | 6 | 9 | 11 => 30,
                         2 if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) => 29,
@@ -578,6 +578,18 @@ fn TIMER_IRQ_0() {
                     if day > days {
                         day = 1;
                         month = month % 12 + 1;
+                    }
+                } else if (hour as i8 + time_offset) < 0 {
+                    day -= 1;
+                    if day == 0 {
+                        month = if month == 1 { 12 } else { month - 1 };
+                        let days = match month {
+                            4 | 6 | 9 | 11 => 30,
+                            2 if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) => 29,
+                            2 => 28,
+                            _ => 31,
+                        };
+                        day = days;
                     }
                 }
 
@@ -597,7 +609,7 @@ fn TIMER_IRQ_0() {
                 let day = gps.utc_datetime.day;
                 let month = gps.utc_datetime.month;
                 let mut year = gps.utc_datetime.year;
-                if (hour + time_offset) > 24 {
+                if (hour as i8 + time_offset) >= 24 {
                     let days = match month {
                         4 | 6 | 9 | 11 => 30,
                         2 if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) => 29,
@@ -607,6 +619,10 @@ fn TIMER_IRQ_0() {
 
                     if day + 1 > days && month == 12 {
                         year += 1;
+                    }
+                } else if (hour as i8 + time_offset) < 0 {
+                    if day == 1 && month == 1 {
+                        year -= 1;
                     }
                 }
 
@@ -627,10 +643,12 @@ fn TIMER_IRQ_0() {
 
             DisplayMode::TimeOffset => {
                 let time_offset = *TIME_OFFSET.borrow(cs).borrow();
+                let abs_time_offset = time_offset.abs() as u8;
+                let sign = if time_offset < 0 { 0b00000100 } else { 0 };
                 digits = [
-                    0,
-                    convert_number_to_bits(time_offset / 10, false),
-                    convert_number_to_bits(time_offset % 10, true),
+                    sign,
+                    convert_number_to_bits(abs_time_offset / 10, false),
+                    convert_number_to_bits(abs_time_offset % 10, true),
                     0,
                     0,
                 ];
@@ -653,7 +671,7 @@ fn IO_IRQ_BANK0() {
 
                 if current == DisplayMode::TimeOffset {
                     let current_time_offset = *TIME_OFFSET.borrow(cs2).borrow();
-                    let new_time_offset = (current_time_offset + 24 - 1) % 24;
+                    let new_time_offset = (current_time_offset - 1) % 13;
                     *TIME_OFFSET.borrow(cs2).borrow_mut() = new_time_offset;
                 }
 
@@ -673,7 +691,7 @@ fn IO_IRQ_BANK0() {
 
                 if current == DisplayMode::TimeOffset {
                     let current_time_offset = *TIME_OFFSET.borrow(cs2).borrow();
-                    let new_time_offset = (current_time_offset + 1) % 24;
+                    let new_time_offset = (current_time_offset + 1) % 13;
                     *TIME_OFFSET.borrow(cs2).borrow_mut() = new_time_offset;
                 }
 
